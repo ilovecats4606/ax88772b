@@ -1,0 +1,81 @@
+name: Build AX88772B
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            pahole \
+            git \
+            wget
+
+      - name: Download Android Clang 12
+        run: |
+          mkdir -p "$HOME/clang"
+          git clone --depth=1 \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            "$HOME/clang"
+
+      - name: Download Linux 5.10 kernel
+        run: |
+          git clone --depth=1 \
+            --branch android12-5.10 \
+            https://android.googlesource.com/kernel/common \
+            kernel
+
+      - name: Prepare kernel
+        run: |
+          cd kernel
+          make ARCH=arm64 defconfig
+          make ARCH=arm64 modules_prepare
+
+      - name: Build ASIX
+        run: |
+          make -C kernel \
+            M="$GITHUB_WORKSPACE" \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            modules
+
+      - name: Inspect module
+        run: |
+          echo "=== FILE ==="
+          file asix.ko
+
+          echo
+          echo "=== MODINFO ==="
+          modinfo ./asix.ko || true
+
+          echo
+          echo "=== VERMAGIC ==="
+          modinfo -F vermagic ./asix.ko || true
+
+          echo
+          echo "=== DEPENDS ==="
+          modinfo -F depends ./asix.ko || true
+
+          echo
+          echo "=== AX88772 USB IDS ==="
+          modinfo ./asix.ko | grep -i '0b95.*772' || true
+
+      - name: Upload driver
+        uses: actions/upload-artifact@v4
+        with:
+          name: quest3-asix
+          path: asix.ko
