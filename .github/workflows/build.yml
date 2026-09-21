@@ -2,16 +2,19 @@ name: Build AX88772B
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout driver
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -25,14 +28,28 @@ jobs:
             git \
             wget
 
-      - name: Download Android Clang 12
+      - name: Install Android Clang 12
         run: |
-          mkdir -p "$HOME/clang"
           git clone --depth=1 \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            "$HOME/clang"
+            "$HOME/android-clang"
 
-      - name: Download Linux 5.10 kernel
+          find "$HOME/android-clang" -maxdepth 3 -type f -name clang -print
+
+      - name: Select Clang
+        run: |
+          CLANG=$(find "$HOME/android-clang" -type f -path '*/bin/clang' | head -1)
+
+          if [ -z "$CLANG" ]; then
+            echo "ERROR: Could not find clang"
+            exit 1
+          fi
+
+          echo "Using clang: $CLANG"
+          echo "CLANG_BIN=$(dirname "$CLANG")" >> "$GITHUB_ENV"
+          echo "$(dirname "$CLANG")" >> "$GITHUB_PATH"
+
+      - name: Clone Android 5.10 kernel
         run: |
           git clone --depth=1 \
             --branch android12-5.10 \
@@ -42,16 +59,33 @@ jobs:
       - name: Prepare kernel
         run: |
           cd kernel
-          make ARCH=arm64 defconfig
-          make ARCH=arm64 modules_prepare
 
-      - name: Build ASIX
+          export PATH="$CLANG_BIN:$PATH"
+
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            defconfig
+
+          make \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            modules_prepare
+
+      - name: Build AX88772B
         run: |
-          make -C kernel \
+          export PATH="$CLANG_BIN:$PATH"
+
+          make \
+            -C kernel \
             M="$GITHUB_WORKSPACE" \
             ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            modules
+            LLVM=1 \
+            LLVM_IAS=1 \
+            modules \
+            V=1
 
       - name: Inspect module
         run: |
@@ -60,22 +94,20 @@ jobs:
 
           echo
           echo "=== MODINFO ==="
-          modinfo ./asix.ko || true
+          modinfo asix.ko || true
 
           echo
-          echo "=== VERMAGIC ==="
-          modinfo -F vermagic ./asix.ko || true
+          echo "=== MODINFO STRINGS ==="
+          strings asix.ko | grep -E \
+            'vermagic=|depends=|alias=|srcversion=' || true
 
           echo
-          echo "=== DEPENDS ==="
-          modinfo -F depends ./asix.ko || true
-
-          echo
-          echo "=== AX88772 USB IDS ==="
-          modinfo ./asix.ko | grep -i '0b95.*772' || true
+          echo "=== USB ALIASES ==="
+          strings asix.ko | grep -Ei \
+            '0b95|772b|ax88772|asix' || true
 
       - name: Upload driver
         uses: actions/upload-artifact@v4
         with:
-          name: quest3-asix
+          name: ax88772b
           path: asix.ko
